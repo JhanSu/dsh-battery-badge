@@ -455,14 +455,217 @@ window.__ModuleLoader__.load({
       })
     }
 
+    /**
+     * Hide the badge whenever something else claims its part of the row.
+     *
+     * Other footer plugins (the mobile gateway's "reconnecting…" pill, the IM
+     * bridge, …) can mount into this same row while connecting or
+     * disconnecting. When that happens our absolutely-positioned badge would
+     * draw on top of their control and both become unreadable.
+     *
+     * Rather than guess which plugin it is, measure: if any sibling inside the
+     * account row overlaps the badge's box, the badge is hidden. That covers
+     * every present and future plugin, and it clears itself the moment the
+     * other element goes away.
+     */
+    function useCrowdedOut(ref) {
+      const [crowded, setCrowded] = useState(false)
+
+      useEffect(() => {
+        const node = ref.current
+        if (!node) return
+        const row = node.parentElement?.parentElement?.parentElement
+        if (!row) return
+
+        // Everything between the badge and the account row is our own slot
+        // machinery — wrapper divs, the slot container, the notifications
+        // layer. They always overlap the badge, so they must be skipped or
+        // the check would never clear.
+        const ownAncestors = new Set()
+        for (let el = node; el && el !== row; el = el.parentElement) ownAncestors.add(el)
+
+        let frame = 0
+        const measure = () => {
+          frame = 0
+          const box = node.getBoundingClientRect()
+          if (box.width === 0) return
+
+          let clash = false
+          for (const child of row.querySelectorAll('*')) {
+            if (ownAncestors.has(child) || node.contains(child)) continue
+            // Skip anything that merely wraps the badge (an ancestor of it).
+            if (child.contains(node)) continue
+            const r = child.getBoundingClientRect()
+            if (r.width === 0 || r.height === 0) continue
+            // Only compact, self-contained widgets count as a clash. The
+            // account button, its anchor span and other row-level wrappers all
+            // span the full row and are supposed to sit under the badge —
+            // a status pill or reconnect button is much narrower than that.
+            if (r.width > box.width * 1.2) continue
+            const overlapsX = r.right > box.left + 2 && r.left < box.right - 2
+            const overlapsY = r.bottom > box.top + 2 && r.top < box.bottom - 2
+            if (overlapsX && overlapsY) {
+              clash = true
+              break
+            }
+          }
+          setCrowded(clash)
+        }
+        const schedule = () => {
+          if (frame === 0) frame = requestAnimationFrame(measure)
+        }
+
+        schedule()
+        const observer = new MutationObserver(schedule)
+        // Observe the whole sidebar footer, not just the account row: a new
+        // status pill may be inserted as a sibling *above* the row, which
+        // would never fire a mutation on the row itself.
+        observer.observe(row.parentElement ?? row, {
+          childList: true,
+          subtree: true,
+          characterData: true,
+          attributes: true,
+        })
+        const sizes = new ResizeObserver(schedule)
+        sizes.observe(row)
+        if (row.parentElement) sizes.observe(row.parentElement)
+        window.addEventListener('resize', schedule)
+        // Belt and braces: poll a few times right after mount, since some
+        // widgets appear on a timer rather than through a DOM mutation we see.
+        const timers = [120, 400, 900, 1600].map((ms) => setTimeout(schedule, ms))
+
+        return () => {
+          if (frame) cancelAnimationFrame(frame)
+          observer.disconnect()
+          sizes.disconnect()
+          window.removeEventListener('resize', schedule)
+          timers.forEach(clearTimeout)
+        }
+      }, [ref])
+
+      return crowded
+    }
+
+    /**
+     * Pick how much label the row can afford.
+     *
+     * The user's nickname must never be truncated by us, so the badge yields
+     * instead. We measure what is actually free to the left of the badge's
+     * right-aligned box and step down through three levels:
+     *
+     *   2 — full label ("MacBook Air M1")
+     *   1 — family only ("MacBook", "iMac", "群晖")
+     *   0 — glyph only, no text at all
+     *
+     * A hidden measuring span holds the widest candidate budget so the choice
+     * is a real text-metrics comparison rather than a character-count guess.
+     */
+    function useFitLevel(ref, full, brief) {
+      const [level, setLevel] = useState(2)
+
+      useEffect(() => {
+        const node = ref.current
+        if (!node) return
+        let frame = 0
+
+        const measure = () => {
+          frame = 0
+          const row = node.parentElement?.parentElement?.parentElement
+          if (!row) return
+
+          const rowBox = row.getBoundingClientRect()
+          const style = getComputedStyle(node)
+
+          const ctx = document.createElement('canvas').getContext('2d')
+          ctx.font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`
+          // Glyph (26) + flex gap (4) + the widest realistic percentage ("100%")
+          const glyphAndPercent = 26 + 4 + 42
+          const widthOf = (t) => (t === null ? 0 : ctx.measureText(t).width)
+
+          const fullNeed = widthOf(full) + 3 + glyphAndPercent
+          const briefNeed = widthOf(brief) + 3 + glyphAndPercent
+
+          // Never touch the nickname. The host already gives it `flex:1` +
+          // `min-width:0` + `text-overflow:ellipsis`, so it manages its own
+          // space; our only job is to ask for as little as possible.
+          //
+          // The row is fixed-width, so decide by how much room the badge can
+          // take before the nickname would have to shrink below a readable
+          // width. 110px is roughly six CJK characters — below that the name
+          // is not identifiable anyway, so we give the space back to it.
+          // Keep enough room for the avatar + the shortest identifiable name
+          // (roughly two CJK characters ≈ 60px) before we claim anything.
+          const MIN_NAME = 80
+          const available = rowBox.width - MIN_NAME
+
+          let level = 2
+          if (available < fullNeed) level = 1
+          if (available < briefNeed) level = 0
+
+          setLevel(level)
+        }
+
+        const schedule = () => {
+          if (frame === 0) frame = requestAnimationFrame(measure)
+        }
+        schedule()
+        const observer = new MutationObserver(schedule)
+        const row = node.parentElement?.parentElement?.parentElement
+        if (row?.parentElement) {
+          observer.observe(row.parentElement, {
+            childList: true,
+            subtree: true,
+            characterData: true,
+            attributes: true,
+          })
+        }
+        const sizes = new ResizeObserver(schedule)
+        if (row) sizes.observe(row)
+        window.addEventListener('resize', schedule)
+        const timers = [80, 300, 800, 1600].map((ms) => setTimeout(schedule, ms))
+
+        return () => {
+          if (frame) cancelAnimationFrame(frame)
+          observer.disconnect()
+          sizes.disconnect()
+          window.removeEventListener('resize', schedule)
+          timers.forEach(clearTimeout)
+        }
+      }, [ref, full, brief])
+
+      return level
+    }
+
     function BatteryBadge(props) {
       const { state, failed } = useBatteryStatus()
       const text = props?.t ?? TEXT.zh
 
+      // Three-step label degradation, decided by measurement (see the fit
+      // effect below): full label → short family name → glyph only.
+      const fullModel = state?.modelShort || state?.modelLabel || state?.modelId || null
+      // Fall back to deriving the family name locally when the host has not
+      // been restarted since `modelBrief` was added.
+      const briefModel =
+        state?.modelBrief ??
+        (state
+          ? state.kind === 'nas'
+            ? { synology: '群晖', zspace: '极空间', ugreen: '绿联', fnos: '飞牛' }[state.nasBrand] ?? null
+            : state.kind === 'desktop-windows'
+              ? 'Windows'
+              : /^(MacBook|iMac|Mac mini|Mac Studio|Mac Pro)/.exec(fullModel ?? '')?.[1] ?? null
+          : null)
+
+      const rootRef = useRef(null)
+      const crowded = useCrowdedOut(rootRef)
+      const fitLevel = useFitLevel(rootRef, fullModel, briefModel)
+
       const percent = state && typeof state.percent === 'number' ? state.percent : null
-      const model = state?.modelShort || state?.modelLabel || state?.modelId || text.unknown
       const light = useLightScheme()
       const color = toneFor(state)
+
+      // Level 2 → full name, 1 → family name, 0 → no text at all.
+      const model = fitLevel === 2 ? fullModel : fitLevel === 1 ? briefModel : null
+      const showText = model !== null && model !== undefined && model !== ''
       const mode = modeFor(state)
       const remaining = formatRemaining(state?.remainingMinutes)
 
@@ -487,7 +690,7 @@ window.__ModuleLoader__.load({
       else if (remaining !== null) status = `${text.remaining} ${remaining}`
 
       const tooltip = [
-        state?.modelLabel ?? state?.modelId ?? text.unknown,
+        state?.modelLabel ?? state?.modelId ?? fullModel ?? text.unknown,
         isLaptop && percent !== null ? `${percent}%` : null,
         isLaptop ? status : null,
       ]
@@ -503,6 +706,7 @@ window.__ModuleLoader__.load({
         'div',
         {
           'data-battery-badge': '',
+          ref: rootRef,
           title: tooltip,
           'aria-label': tooltip,
           style: {
@@ -516,11 +720,11 @@ window.__ModuleLoader__.load({
             alignItems: 'center',
             justifyContent: 'flex-end',
             gap: 4,
-            // Keep clear of the avatar/nickname on the left, but leave enough
-            // room that "MacBook Air M1" is not ellipsised at the default
-            // sidebar width. 72% covers the full label while still stopping
-            // the badge from ever reaching the avatar.
-            maxWidth: '72%',
+            // Width is driven purely by content: the badge shrinks itself via
+            // useFitLevel rather than being clipped by a percentage cap, so
+            // its measured width is always the width it actually needs.
+            width: 'max-content',
+            maxWidth: '100%',
             padding: '0 10px 0 4px',
             boxSizing: 'border-box',
             fontFamily: appleFont,
@@ -534,11 +738,16 @@ window.__ModuleLoader__.load({
             whiteSpace: 'nowrap',
             userSelect: 'none',
             pointerEvents: 'none',
+            // Hidden but still laid out: `visibility` keeps the element's box
+            // measurable, so the overlap check can tell when the row frees up
+            // again. (Returning null would detach it and freeze the state.)
+            visibility: crowded ? 'hidden' : 'visible',
             WebkitFontSmoothing: 'antialiased',
             MozOsgrFontSmoothing: 'grayscale',
           },
         },
-        h(
+        showText &&
+          h(
           'span',
           {
             style: {
@@ -548,6 +757,9 @@ window.__ModuleLoader__.load({
               // Same `color` as the percentage and the glyph, so all three
               // render in exactly the same shade.
               color,
+              // Match the percentage's theme-aware weight — see the comment
+              // there for why light mode needs the extra step.
+              fontWeight: light ? 450 : 350,
               // A little breathing room between the model name and the
               // percentage (the flex `gap` alone reads cramped at this size).
               marginRight: 3,
@@ -561,10 +773,12 @@ window.__ModuleLoader__.load({
             'span',
             {
               style: {
-                // Light text on a dark background blooms optically and reads
-                // heavier than the same weight in light mode, so the dark theme
-                // steps down one notch to keep the two visually matched.
-                fontWeight: light ? 400 : 350,
+                // Dark-on-light text looks thinner than light-on-dark text at
+                // the same weight: the light glyphs bloom outward on a dark
+                // panel, while dark glyphs on white stay crisp and read thin.
+                // So light mode needs *more* weight, not less — 450 against
+                // dark mode's 350 lands both at the same perceived stroke.
+                fontWeight: light ? 450 : 350,
                 color,
                 fontFamily: appleFont,
                 fontVariantNumeric: 'tabular-nums',
