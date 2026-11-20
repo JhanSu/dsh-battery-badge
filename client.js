@@ -163,16 +163,18 @@ window.__ModuleLoader__.load({
           // The charging bolt intentionally overflows the shell; without this
           // the SVG viewport would clip it.
           //
-          // `translateY(-1px)` is an optical correction, not a layout one:
-          // flex centres this box against the text's *line box*, but digits
-          // have no descenders, so their ink sits about 1px above the line-box
-          // centre. Without the nudge the battery reads a pixel low.
+          // The box is an integer 26×18 (matching the viewBox 1:1), which is
+          // what makes this stable across pixel densities. On top of that, a
+          // half-pixel lift: the battery outline sits slightly below the digits'
+          // optical centre because its shell is drawn with the bolt overhang
+          // included in the viewBox. `-0.5px` measured identically at DPR 1
+          // and DPR 2, unlike the old `-1px` which only fixed one of them.
           style: {
             flexShrink: 0,
             display: 'block',
             color,
             overflow: 'visible',
-            transform: 'translateY(-1px)',
+            transform: 'translateY(-0.5px)',
           },
         },
         // Shell
@@ -393,9 +395,6 @@ window.__ModuleLoader__.load({
           flexShrink: 0,
           display: 'block',
           color,
-          // Optical correction, same as BatteryGlyph: flex centres the box
-          // against the text line box, but digits have no descenders.
-          transform: 'translateY(-1px)',
         },
         dangerouslySetInnerHTML: { __html: icon.body },
       })
@@ -462,9 +461,17 @@ window.__ModuleLoader__.load({
             alignItems: 'center',
             justifyContent: 'flex-end',
             gap: 4,
+            // Never overlap the avatar/nickname on the left. On a narrow
+            // sidebar the row is only ~260px, and the badge used to start at
+            // x≈88 — right on top of "森度". Reserving the left ~36% keeps the
+            // account name readable and lets the model name truncate instead.
+            maxWidth: '64%',
             padding: '0 10px 0 4px',
             boxSizing: 'border-box',
             fontFamily: appleFont,
+            // One step smaller than the account label (14px): the badge is
+            // secondary information and a smaller size also keeps the row
+            // comfortable on narrow screens.
             fontSize: 12,
             lineHeight: '16px',
             letterSpacing: '-0.01em',
@@ -510,7 +517,11 @@ window.__ModuleLoader__.load({
             percent === null ? '—' : `${percent}%`,
           ),
         isLaptop
-          ? h(BatteryGlyph, { percent, mode, color, width: 24 })
+          // Width 26 keeps a 1:1 mapping to the 26×18 viewBox, so the box is
+          // exactly 26×18 — both integers. A fractional box height
+          // (24 × 18/26 ≈ 16.6) rounds differently at DPR 1 and DPR 2, which
+          // is why the glyph looked aligned on one screen and not the other.
+          ? h(BatteryGlyph, { percent, mode, color, width: 26 })
           : h(DeviceIcon, { kind, color }),
       )
     }
@@ -530,6 +541,16 @@ window.__ModuleLoader__.load({
 [class*="rail"] :has(> [data-slot="${SLOT}"] > [data-battery-badge]),
 [class*="collapsed"] :has(> [data-slot="${SLOT}"] > [data-battery-badge]) {
   display: none !important;
+}
+
+/* Narrow screens (phones / the mobile gateway's web view). Below ~360px the
+   account row cannot fit avatar + nickname + model + percentage + glyph, so the
+   badge used to slide left and collide with the nickname. Hiding it there is
+   the honest choice: the phone UI has its own status area anyway. */
+@media (max-width: 380px) {
+  :has(> [data-slot="${SLOT}"] > [data-battery-badge]) {
+    display: none !important;
+  }
 }
 `
 
