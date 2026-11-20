@@ -114,8 +114,12 @@ window.__ModuleLoader__.load({
      */
     function modeFor(state) {
       if (state === null || state.hasBattery === false) return null
-      if (state.charging) return 'bolt'
-      if (state.charged || state.acAttached) return 'plug'
+      // macOS keeps the bolt visible whenever the Mac is on power — including
+      // at 100% ("charged") — because the cable is still connected. The plug
+      // only appears for the unusual "AC attached but not charging" case
+      // (battery care / charge limit).
+      if (state.charging || state.charged) return 'bolt'
+      if (state.acAttached) return 'plug'
       return null
     }
 
