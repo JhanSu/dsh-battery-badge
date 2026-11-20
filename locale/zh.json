@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "电池标识",
+    "description": "在侧栏底部显示这台 Mac 的机型、电量百分比和剩余可用时间，按 macOS 风格呈现。",
+    "detail": "docs/DETAIL.md"
+  }
+}

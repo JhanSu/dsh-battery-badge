@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "Battery badge",
+    "description": "Shows this Mac's model, battery percentage and time remaining in the sidebar footer, macOS style.",
+    "detail": "docs/DETAIL.md"
+  }
+}

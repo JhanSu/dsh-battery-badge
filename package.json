@@ -1,0 +1,51 @@
+{
+  "name": "dsh-battery-badge",
+  "version": "1.0.0",
+  "private": false,
+  "type": "module",
+  "description": "Device badge for the DSH sidebar: on laptops shows the model, charge level and battery state; on desktops and NAS boxes shows a matching device icon instead.",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "docs",
+    "icon.svg"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-sidebar"
+      ]
+    }
+  },
+  "license": "MIT",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "battery",
+    "sidebar",
+    "device",
+    "macos",
+    "nas"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JhanSu/dsh-battery-badge.git"
+  },
+  "homepage": "https://github.com/JhanSu/dsh-battery-badge"
+}
