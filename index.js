@@ -146,8 +146,13 @@ function parsePmset(text) {
   // before testing for the charging keyword.
   const discharging = /discharging/.test(state)
   const notCharging = /not charging/.test(state)
-  const charging = !discharging && !notCharging && /(^|\s)charging(\s|$)/.test(state)
-  const charged = /charged/.test(state)
+  // pmset reports "finishing charge" for the last stretch at 100% while still
+  // on power — macOS keeps the bolt on screen then, so treat it as charging.
+  const finishing = /finishing charge/.test(state)
+  const charging =
+    !discharging && !notCharging && (/(^|\s)charging(\s|$)/.test(state) || finishing)
+  // "charged" must not swallow "finishing charge"; match it as a word.
+  const charged = /(^|\s)charged(\s|;|$)/.test(state) && !finishing
   const acAttached = charging || charged || /ac attached/.test(state)
 
   const remaining = /(\d+):(\d+)\s*remaining/.exec(line)
