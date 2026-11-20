@@ -89,6 +89,32 @@ function shortModelLabel(modelId, label) {
   return series === undefined ? base : `${base} ${series}`
 }
 
+/**
+ * Even shorter than `shortModelLabel` — just the product family.
+ *
+ * Used as the middle rung of the client's three-step degradation: if the
+ * full label would collide with a long account name, the badge falls back to
+ * "MacBook", "iMac", "Mac mini", or the NAS brand name; if that still does not
+ * fit, it drops the text entirely and shows only the glyph.
+ */
+function briefModelLabel(modelId, label, kind, nasBrand) {
+  const NAS_NAMES = {
+    synology: '群晖',
+    zspace: '极空间',
+    ugreen: '绿联',
+    fnos: '飞牛',
+  }
+  if (kind === 'nas') return NAS_NAMES[nasBrand] ?? null
+  if (typeof label === 'string') {
+    // Family only — "MacBook Air M1" must degrade to "MacBook", not
+    // "MacBook Air", otherwise it barely saves any width.
+    const family = /^(MacBook|iMac|Mac mini|Mac Studio|Mac Pro)/.exec(label)
+    if (family !== null) return family[1]
+  }
+  if (kind === 'desktop-windows') return 'Windows'
+  return null
+}
+
 /** Which icon family to ask the client for. */
 function deviceKindFor(modelId, platform, hasBattery) {
   if (platform === 'darwin') {
@@ -340,6 +366,7 @@ async function snapshot({ fresh = false } = {}) {
     modelId,
     modelLabel,
     modelShort: shortModelLabel(modelId, modelLabel),
+    modelBrief: briefModelLabel(modelId, modelLabel, kind, brand),
     hostname,
     ...(battery === null
       ? {}
