@@ -85,17 +85,24 @@ window.__ModuleLoader__.load({
       return !window.matchMedia?.('(prefers-color-scheme: dark)').matches
     }
 
-    function toneFor(state, light = true) {
+/**
+     * One colour for the model, the percentage and the battery glyph.
+     *
+     * The glyph draws with `currentColor`, so whatever this returns is also the
+     * battery colour — keeping the three elements visually identical by
+     * construction rather than by matching hex values in two places.
+     */
+    function toneFor(state) {
       if (state === null) return 'var(--dsw-alias-label-tertiary, #888)'
-      if (typeof state.percent === 'number' && state.percent <= 10 && !state.charging) {
+      if (
+        typeof state.percent === 'number' &&
+        state.percent <= 10 &&
+        !state.charging &&
+        !state.charged
+      ) {
         return 'var(--dsw-alias-state-error-primary, #e5484d)'
       }
-      // Light mode: `label-secondary` alone still reads a touch light next to
-      // the model name, so mix it toward `label-primary` for a middle step.
-      // Dark mode is intentionally untouched.
-      return light
-        ? 'color-mix(in srgb, var(--dsw-alias-label-primary, #0f1115) 25%, var(--dsw-alias-label-secondary, #61666b))'
-        : 'var(--dsw-alias-label-primary, #fff)'
+      return 'var(--dsw-alias-label-primary, #1d1d1f)'
     }
 
     /**
@@ -112,6 +119,36 @@ window.__ModuleLoader__.load({
       return null
     }
 
+    /** How wide a background-coloured gap surrounds the charging glyph. */
+    const GLYPH_GAP = 2.6
+
+    /**
+ * Plug silhouette — a 1024-unit icon (two prongs, a rounded body, a cord).
+ * It is mapped into the 26×18 battery grid at render time, so the geometry
+ * lives in its native coordinate space rather than being hand-scaled.
+ */
+    const PLUG_PATH =
+      'M400.896 0c25.856 0 46.848 21.76 46.848 48.64v161.664h112.256V48.64'
+      + 'c0-26.88 20.992-48.512 46.72-48.512h28.16c25.856 0 46.848 21.76 46.848 48.64'
+      + 'v161.664h96.512c17.28 0 37.76 13.696 37.76 38.4v220.416'
+      + 'c0 132.864-93.568 241.152-218.624 277.76v159.104'
+      + 'c0 35.712-27.904 64.64-62.464 64.64h-62.336'
+      + 'a63.616 63.616 0 0 1-62.464-64.64V746.752'
+      + 'C285.44 710.016 192 601.856 192 469.248V248.704'
+      + 'c0-24.576 20.48-38.4 37.76-38.4h96.256V48.64'
+      + 'c0-26.88 20.992-48.512 46.72-48.512h28.16z'
+
+    /** Native bounding box of PLUG_PATH, used to scale it into the battery. */
+    const PLUG_BOX = { x0: 192, x1: 814, y0: 0, y1: 968 }
+    /** How tall the plug renders inside the 26×18 grid. */
+    const PLUG_HEIGHT = 13
+
+/** Charging bolt outline — overflows the shell above and below. */
+    const BOLT_PATH = 'M13.55 1.0 L8.05 9.2 H11.2 L9.85 17.0 L15.55 8.1 H12.35 Z'
+
+    /** Monotonic counter so every mounted badge gets a unique mask id. */
+    let badgeSeq = 0
+
     /**
      * macOS menu-bar battery glyph.
      *
@@ -125,6 +162,11 @@ window.__ModuleLoader__.load({
      */
     function BatteryGlyph({ percent, mode, color, width }) {
       const pct = typeof percent === 'number' ? Math.max(0, Math.min(100, percent)) : 0
+
+      // A duplicated mask id would make every badge clip to the first one's
+      // shape, so each instance owns its own.
+      const maskId = useRef(null)
+      if (maskId.current === null) maskId.current = `dsh-battery-bolt-${++badgeSeq}`
 
       const VB_W = 26
       const VB_H = 18
@@ -152,6 +194,29 @@ window.__ModuleLoader__.load({
       const glyph = mode === 'bolt' || mode === 'plug' ? mode : null
       const bg = 'var(--dsw-alias-bg-layer-1, #fff)'
 
+      // Both glyphs are drawn in their own coordinate space and mapped onto
+      // the 26×18 battery grid here. The plug arrives as a 1024-unit icon, so
+      // it needs both a scale and a centre offset; the bolt is already local.
+      const plugScale = PLUG_HEIGHT / (PLUG_BOX.y1 - PLUG_BOX.y0)
+      const plugCX = (PLUG_BOX.x0 + PLUG_BOX.x1) / 2
+      const plugCY = (PLUG_BOX.y0 + PLUG_BOX.y1) / 2
+      // The bolt's native height is 16 units; shrink it to 12 to match the
+      // plug's visual weight. Scaling happens about the shell centre (11.85,
+      // 9), then the -0.4 optical lift is applied in scaled units.
+      const BOLT_HEIGHT = 12
+      const boltScale = BOLT_HEIGHT / 16
+      const glyphTransform =
+        glyph === 'plug'
+          ? `translate(${(11.85 - plugCX * plugScale).toFixed(3)} ${(9.0 - plugCY * plugScale).toFixed(3)}) scale(${plugScale.toFixed(5)})`
+          : glyph === 'bolt'
+            ? `translate(11.85 9) scale(${boltScale}) translate(-11.85 -9) translate(0 -0.4)`
+            : undefined
+      // The gap is specified in battery-grid units, so the plug (drawn at
+      // 1/64th scale) needs it divided back out to stay visually equal.
+      const glyphGap =
+        glyph === 'plug' ? GLYPH_GAP / plugScale : glyph === 'bolt' ? GLYPH_GAP / boltScale : GLYPH_GAP
+      const glyphPath = glyph === 'plug' ? PLUG_PATH : BOLT_PATH
+
       return h(
         'svg',
         {
@@ -177,79 +242,65 @@ window.__ModuleLoader__.load({
             transform: 'translateY(-0.5px)',
           },
         },
-        // Shell
-        h('rect', {
-          x: sx,
-          y: sy,
-          width: sw,
-          height: sh,
-          rx: sr,
-          ry: sr,
-          fill: 'none',
-          stroke: 'currentColor',
-          strokeWidth: stroke,
-        }),
-        // Nub
-        h('path', {
-          d: `M${nubX} ${nubY} A 1.5 1.5 0 0 1 ${nubX} ${nubY + 3} Z`,
-          fill: 'currentColor',
-        }),
-        // Charge level
-        pct > 0 &&
+        // Whole battery (shell + nub + charge fill) shares one mask so the
+        // charging glyph cuts through *everything* — including the shell
+        // outline — not just the fill. The glyph is then painted back solid
+        // on top, which is what produces the floating-bolt look.
+        glyph !== null &&
+          h(
+            'mask',
+            { id: maskId.current, maskUnits: 'userSpaceOnUse', x: 0, y: 0, width: VB_W, height: VB_H },
+            h('rect', { x: 0, y: 0, width: VB_W, height: VB_H, fill: '#fff' }),
+            // Outline-only pass: knocks a background-coloured ring around the
+            // glyph, which is the gap you see between bolt and battery.
+            h('path', {
+              d: glyphPath,
+              fill: 'none',
+              stroke: '#000',
+              strokeWidth: glyphGap,
+              strokeLinejoin: 'round',
+              transform: glyphTransform,
+            }),
+          ),
+        h(
+          'g',
+          glyph === null ? {} : { mask: `url(#${maskId.current})` },
+          // Shell
           h('rect', {
-            x: fx,
-            y: fy,
-            width: fw,
-            height: fh,
-            rx: 1.8,
-            ry: 1.8,
+            x: sx,
+            y: sy,
+            width: sw,
+            height: sh,
+            rx: sr,
+            ry: sr,
+            fill: 'none',
+            stroke: 'currentColor',
+            strokeWidth: stroke,
+          }),
+          // Nub
+          h('path', {
+            d: `M${nubX} ${nubY} A 1.5 1.5 0 0 1 ${nubX} ${nubY + 3} Z`,
             fill: 'currentColor',
           }),
-        // Charging: a lightning bolt that deliberately overflows the shell
-        // above and below. That protruding silhouette is what makes a menu-bar
-        // charging icon readable at 20px; a bolt confined inside the shell just
-        // reads as a smudge. Light fill + dark outline keeps it visible whether
-        // it lands on the filled or the empty part of the battery.
-        glyph === 'bolt' &&
+          // Charge level
+          pct > 0 &&
+            h('rect', {
+              x: fx,
+              y: fy,
+              width: fw,
+              height: fh,
+              rx: 1.8,
+              ry: 1.8,
+              fill: 'currentColor',
+            }),
+        ),
+        // Glyph body, painted back solid after the masked fill has cut the
+        // gap around it. Order matters: fill (masked) → body (solid).
+        glyph !== null &&
           h('path', {
-            // Optically centred on the shell: the zig-zag's bounding box is
-            // x 8.15–16.05 (mid 12.1) but its visual mass leans left, so the
-            // path is nudged to land on the shell's centre line (11.85).
-            d: 'M13.55 1.0 L8.05 9.2 H11.2 L9.85 17.0 L15.55 8.1 H12.35 Z',
-            // Fill with the icon colour (same colour as the battery itself),
-            // then stroke a wider ring in the *background* colour. The ring is
-            // what separates the bolt from the charge fill — a knockout gap.
-            //
-            // Light mode: black bolt + white gap ring. Dark mode: white bolt +
-            // black gap ring. The two cases are exact inverses, and because
-            // both colours come from CSS variables the swap is automatic.
+            d: glyphPath,
             fill: 'currentColor',
-            stroke: 'var(--dsw-alias-bg-layer-1, #fff)',
-            // Thick enough to cut a visible gap between the bolt and the dark
-            // charge fill; thinner and the two merge into one blob.
-            strokeWidth: 2.0,
-            strokeLinejoin: 'round',
-            strokeLinecap: 'round',
-            paintOrder: 'stroke fill',
-          }),
-        // Plug — shown on power but not actively charging (e.g. fully charged).
-        // It uses the same protruding treatment as the bolt: the two prongs
-        // rise above the shell and the cord hangs below it.
-        // Plug — the macOS menu-bar charging shape: two prongs above, a
-        // rounded body, and a cord below. Drawn as ONE closed silhouette so the
-        // background-coloured stroke forms a clean gap around the whole shape
-        // instead of leaving white seams where separately-stroked paths overlap.
-        glyph === 'plug' &&
-          h('path', {
-            d: 'M10.4 2.2 H11.39 V5.22 H12.81 V2.2 H13.81 V5.22 H13.9 '
-              + 'A0.95 0.95 0 0 1 14.85 6.17 V8.62 A0.95 0.95 0 0 1 13.9 9.57 '
-              + 'H12.5 V15.8 H11.51 V9.57 H10.3 '
-              + 'A0.95 0.95 0 0 1 9.35 8.62 V6.17 A0.95 0.95 0 0 1 10.3 5.22 H10.4 Z',
-            fill: 'currentColor',
-            stroke: bg,
-            strokeWidth: 1.6,
-            strokeLinejoin: 'round',
-            paintOrder: 'stroke fill',
+            transform: glyphTransform,
           }),
       )
     }
@@ -407,7 +458,7 @@ window.__ModuleLoader__.load({
       const percent = state && typeof state.percent === 'number' ? state.percent : null
       const model = state?.modelShort || state?.modelLabel || state?.modelId || text.unknown
       const light = useLightScheme()
-      const color = toneFor(state, light)
+      const color = toneFor(state)
       const mode = modeFor(state)
       const remaining = formatRemaining(state?.remainingMinutes)
 
@@ -461,11 +512,11 @@ window.__ModuleLoader__.load({
             alignItems: 'center',
             justifyContent: 'flex-end',
             gap: 4,
-            // Never overlap the avatar/nickname on the left. On a narrow
-            // sidebar the row is only ~260px, and the badge used to start at
-            // x≈88 — right on top of "森度". Reserving the left ~36% keeps the
-            // account name readable and lets the model name truncate instead.
-            maxWidth: '64%',
+            // Keep clear of the avatar/nickname on the left, but leave enough
+            // room that "MacBook Air M1" is not ellipsised at the default
+            // sidebar width. 72% covers the full label while still stopping
+            // the badge from ever reaching the avatar.
+            maxWidth: '72%',
             padding: '0 10px 0 4px',
             boxSizing: 'border-box',
             fontFamily: appleFont,
@@ -490,7 +541,9 @@ window.__ModuleLoader__.load({
               minWidth: 0,
               overflow: 'hidden',
               textOverflow: 'ellipsis',
-              color: 'var(--dsw-alias-label-tertiary, #888)',
+              // Same `color` as the percentage and the glyph, so all three
+              // render in exactly the same shade.
+              color,
               // A little breathing room between the model name and the
               // percentage (the flex `gap` alone reads cramped at this size).
               marginRight: 3,
