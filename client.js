@@ -689,10 +689,22 @@ window.__ModuleLoader__.load({
       else if (state.acAttached) status = text.acAttached
       else if (remaining !== null) status = `${text.remaining} ${remaining}`
 
+      // The tooltip is the escape hatch for a downgraded label: whatever the
+      // row had to shorten, hovering always reveals the full hardware name.
+      //
+      // Order: full marketing name → battery state → the raw model identifier.
+      // The raw id only appears when it adds information (i.e. differs from
+      // the friendly label), so Macs show "MacBook Air (M1, 2020) ·
+      // MacBookAir10,1" while NAS boxes show their single product string once.
+      const friendlyName = state?.modelLabel ?? state?.modelId ?? fullModel ?? null
+      const rawId = state?.modelId ?? null
+      const showRawId =
+        rawId !== null && friendlyName !== null && rawId !== friendlyName
       const tooltip = [
-        state?.modelLabel ?? state?.modelId ?? fullModel ?? text.unknown,
+        friendlyName ?? text.unknown,
         isLaptop && percent !== null ? `${percent}%` : null,
         isLaptop ? status : null,
+        showRawId ? rawId : null,
       ]
         .filter(Boolean)
         .join(' · ')
@@ -737,7 +749,12 @@ window.__ModuleLoader__.load({
             color: 'var(--dsw-alias-label-secondary, #666)',
             whiteSpace: 'nowrap',
             userSelect: 'none',
-            pointerEvents: 'none',
+            // Must accept hover, otherwise the browser never shows the native
+            // `title` tooltip (the whole reason a downgraded label stays
+            // explainable). The badge sits at the row's right edge, clear of
+            // the account button, so this does not steal menu clicks.
+            pointerEvents: 'auto',
+            cursor: 'default',
             // Hidden but still laid out: `visibility` keeps the element's box
             // measurable, so the overlap check can tell when the row frees up
             // again. (Returning null would detach it and freeze the state.)
